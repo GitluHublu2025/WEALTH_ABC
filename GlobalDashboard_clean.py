@@ -21,144 +21,7 @@ from datetime import date
 
 st.set_page_config(page_title="Global Portfolio Dashboard — Final", layout="wide")
 st.title("📈 Global Portfolio Dashboard — Final")
-# ---------------- Portfolio Summary Snapshot (USD & INR with accrued + maturity value) ----------------
-st.subheader("📊 Portfolio Snapshot — Stocks, Bonds & FDs (with accrued & maturity values)")
 
-from datetime import datetime
-
-def compute_accrued_and_maturity(df):
-    """Return accrued current value and projected 1-year maturity value."""
-    if df is None or df.empty:
-        return 0.0, 0.0
-    now = datetime.today().date()
-    principals = pd.to_numeric(df["Principal"], errors="coerce").fillna(0.0)
-    rates = pd.to_numeric(df["InterestRate"], errors="coerce").fillna(0.0) / 100.0
-
-    # Try to parse "Date" column
-    if "Date" in df.columns:
-        try:
-            dates = pd.to_datetime(df["Date"], errors="coerce").dt.date
-        except Exception:
-            dates = [now] * len(df)
-    else:
-        dates = [now] * len(df)
-
-    accrued, maturity = [], []
-    for p, r, d in zip(principals, rates, dates):
-        try:
-            years = (now - d).days / 365.0 if d is not None else 0.0
-        except Exception:
-            years = 0.0
-        # accrued so far
-        val_now = p + (p * r * years)
-        accrued.append(val_now)
-        # project 1-year full
-        val_maturity = p + (p * r * 1.0)
-        maturity.append(val_maturity)
-
-    return float(np.nansum(accrued)), float(np.nansum(maturity))
-
-def compute_snapshot():
-    rows = []
-
-    # --- Stocks ---
-    invested_inr_stocks = (india_hold["Cost INR"].sum() if not india_hold.empty else 0.0) + \
-                          (us_hold["Cost INR"].sum() if not us_hold.empty else 0.0)
-    invested_usd_stocks = (india_hold["Cost USD"].sum() if not india_hold.empty else 0.0) + \
-                          (us_hold["Cost USD"].sum() if not us_hold.empty else 0.0)
-
-    current_inr_stocks = (india_hold["Market Value INR"].sum() if not india_hold.empty else 0.0) + \
-                         (us_hold["Market Value INR"].sum() if not us_hold.empty else 0.0)
-    current_usd_stocks = (india_hold["Market Value USD"].sum() if not india_hold.empty else 0.0) + \
-                         (us_hold["Market Value USD"].sum() if not us_hold.empty else 0.0)
-
-    maturity_inr_stocks = current_inr_stocks  # no fixed maturity concept
-    maturity_usd_stocks = current_usd_stocks
-
-    ret_inr_stocks = ((current_inr_stocks - invested_inr_stocks) / invested_inr_stocks * 100.0) if invested_inr_stocks>0 else 0.0
-    ret_usd_stocks = ((current_usd_stocks - invested_usd_stocks) / invested_usd_stocks * 100.0) if invested_usd_stocks>0 else 0.0
-
-    rows.append({
-        "Asset Class": "Stocks",
-        "Invested INR": round(invested_inr_stocks,2),
-        "Current INR": round(current_inr_stocks,2),
-        "Maturity INR": round(maturity_inr_stocks,2),
-        "Return % (INR)": round(ret_inr_stocks,2),
-        "Invested USD": round(invested_usd_stocks,2),
-        "Current USD": round(current_usd_stocks,2),
-        "Maturity USD": round(maturity_usd_stocks,2),
-        "Return % (USD)": round(ret_usd_stocks,2)
-    })
-
-    # --- Bonds ---
-    invested_inr_bonds = bonds_inr_df["Principal"].sum() if not bonds_inr_df.empty else 0.0
-    invested_usd_bonds = bonds_usd_df["Principal"].sum() if not bonds_usd_df.empty else 0.0
-    current_inr_bonds, maturity_inr_bonds = compute_accrued_and_maturity(bonds_inr_df)
-    current_usd_bonds, maturity_usd_bonds = compute_accrued_and_maturity(bonds_usd_df)
-
-    ret_inr_bonds = ((current_inr_bonds - invested_inr_bonds) / invested_inr_bonds * 100.0) if invested_inr_bonds>0 else 0.0
-    ret_usd_bonds = ((current_usd_bonds - invested_usd_bonds) / invested_usd_bonds * 100.0) if invested_usd_bonds>0 else 0.0
-
-    rows.append({
-        "Asset Class": "Bonds",
-        "Invested INR": round(invested_inr_bonds,2),
-        "Current INR": round(current_inr_bonds,2),
-        "Maturity INR": round(maturity_inr_bonds,2),
-        "Return % (INR)": round(ret_inr_bonds,2),
-        "Invested USD": round(invested_usd_bonds,2),
-        "Current USD": round(current_usd_bonds,2),
-        "Maturity USD": round(maturity_usd_bonds,2),
-        "Return % (USD)": round(ret_usd_bonds,2)
-    })
-
-    # --- FDs ---
-    invested_inr_fds = fds_inr_df["Principal"].sum() if not fds_inr_df.empty else 0.0
-    invested_usd_fds = fds_usd_df["Principal"].sum() if not fds_usd_df.empty else 0.0
-    current_inr_fds, maturity_inr_fds = compute_accrued_and_maturity(fds_inr_df)
-    current_usd_fds, maturity_usd_fds = compute_accrued_and_maturity(fds_usd_df)
-
-    ret_inr_fds = ((current_inr_fds - invested_inr_fds) / invested_inr_fds * 100.0) if invested_inr_fds>0 else 0.0
-    ret_usd_fds = ((current_usd_fds - invested_usd_fds) / invested_usd_fds * 100.0) if invested_usd_fds>0 else 0.0
-
-    rows.append({
-        "Asset Class": "FDs",
-        "Invested INR": round(invested_inr_fds,2),
-        "Current INR": round(current_inr_fds,2),
-        "Maturity INR": round(maturity_inr_fds,2),
-        "Return % (INR)": round(ret_inr_fds,2),
-        "Invested USD": round(invested_usd_fds,2),
-        "Current USD": round(current_usd_fds,2),
-        "Maturity USD": round(maturity_usd_fds,2),
-        "Return % (USD)": round(ret_usd_fds,2)
-    })
-
-    # --- Totals ---
-    tot_invested_inr = sum(r["Invested INR"] for r in rows)
-    tot_current_inr  = sum(r["Current INR"] for r in rows)
-    tot_maturity_inr = sum(r["Maturity INR"] for r in rows)
-    tot_invested_usd = sum(r["Invested USD"] for r in rows)
-    tot_current_usd  = sum(r["Current USD"] for r in rows)
-    tot_maturity_usd = sum(r["Maturity USD"] for r in rows)
-
-    tot_ret_inr = ((tot_current_inr - tot_invested_inr)/tot_invested_inr*100.0) if tot_invested_inr>0 else 0.0
-    tot_ret_usd = ((tot_current_usd - tot_invested_usd)/tot_invested_usd*100.0) if tot_invested_usd>0 else 0.0
-
-    rows.append({
-        "Asset Class": "TOTAL",
-        "Invested INR": round(tot_invested_inr,2),
-        "Current INR": round(tot_current_inr,2),
-        "Maturity INR": round(tot_maturity_inr,2),
-        "Return % (INR)": round(tot_ret_inr,2),
-        "Invested USD": round(tot_invested_usd,2),
-        "Current USD": round(tot_current_usd,2),
-        "Maturity USD": round(tot_maturity_usd,2),
-        "Return % (USD)": round(tot_ret_usd,2)
-    })
-
-    return pd.DataFrame(rows)
-
-snapshot_df = compute_snapshot()
-st.dataframe(snapshot_df, use_container_width=True)
 
 # ---------------- Sidebar: uploads & settings ----------------
 st.sidebar.header("Uploads & Settings")
@@ -351,6 +214,144 @@ bonds_inr_df = load_asset_csv(bonds_inr_file, "INR")
 bonds_usd_df = load_asset_csv(bonds_usd_file, "USD")
 fds_inr_df = load_asset_csv(fds_inr_file, "INR")
 fds_usd_df = load_asset_csv(fds_usd_file, "USD")
+# ---------------- Portfolio Summary Snapshot (USD & INR with accrued + maturity value) ----------------
+st.subheader("📊 Portfolio Snapshot — Stocks, Bonds & FDs (with accrued & maturity values)")
+
+from datetime import datetime
+
+def compute_accrued_and_maturity(df):
+    """Return accrued current value and projected 1-year maturity value."""
+    if df is None or df.empty:
+        return 0.0, 0.0
+    now = datetime.today().date()
+    principals = pd.to_numeric(df["Principal"], errors="coerce").fillna(0.0)
+    rates = pd.to_numeric(df["InterestRate"], errors="coerce").fillna(0.0) / 100.0
+
+    # Try to parse "Date" column
+    if "Date" in df.columns:
+        try:
+            dates = pd.to_datetime(df["Date"], errors="coerce").dt.date
+        except Exception:
+            dates = [now] * len(df)
+    else:
+        dates = [now] * len(df)
+
+    accrued, maturity = [], []
+    for p, r, d in zip(principals, rates, dates):
+        try:
+            years = (now - d).days / 365.0 if d is not None else 0.0
+        except Exception:
+            years = 0.0
+        # accrued so far
+        val_now = p + (p * r * years)
+        accrued.append(val_now)
+        # project 1-year full
+        val_maturity = p + (p * r * 1.0)
+        maturity.append(val_maturity)
+
+    return float(np.nansum(accrued)), float(np.nansum(maturity))
+
+def compute_snapshot():
+    rows = []
+
+    # --- Stocks ---
+    invested_inr_stocks = (india_hold["Cost INR"].sum() if not india_hold.empty else 0.0) + \
+                          (us_hold["Cost INR"].sum() if not us_hold.empty else 0.0)
+    invested_usd_stocks = (india_hold["Cost USD"].sum() if not india_hold.empty else 0.0) + \
+                          (us_hold["Cost USD"].sum() if not us_hold.empty else 0.0)
+
+    current_inr_stocks = (india_hold["Market Value INR"].sum() if not india_hold.empty else 0.0) + \
+                         (us_hold["Market Value INR"].sum() if not us_hold.empty else 0.0)
+    current_usd_stocks = (india_hold["Market Value USD"].sum() if not india_hold.empty else 0.0) + \
+                         (us_hold["Market Value USD"].sum() if not us_hold.empty else 0.0)
+
+    maturity_inr_stocks = current_inr_stocks  # no fixed maturity concept
+    maturity_usd_stocks = current_usd_stocks
+
+    ret_inr_stocks = ((current_inr_stocks - invested_inr_stocks) / invested_inr_stocks * 100.0) if invested_inr_stocks>0 else 0.0
+    ret_usd_stocks = ((current_usd_stocks - invested_usd_stocks) / invested_usd_stocks * 100.0) if invested_usd_stocks>0 else 0.0
+
+    rows.append({
+        "Asset Class": "Stocks",
+        "Invested INR": round(invested_inr_stocks,2),
+        "Current INR": round(current_inr_stocks,2),
+        "Maturity INR": round(maturity_inr_stocks,2),
+        "Return % (INR)": round(ret_inr_stocks,2),
+        "Invested USD": round(invested_usd_stocks,2),
+        "Current USD": round(current_usd_stocks,2),
+        "Maturity USD": round(maturity_usd_stocks,2),
+        "Return % (USD)": round(ret_usd_stocks,2)
+    })
+
+    # --- Bonds ---
+    invested_inr_bonds = bonds_inr_df["Principal"].sum() if not bonds_inr_df.empty else 0.0
+    invested_usd_bonds = bonds_usd_df["Principal"].sum() if not bonds_usd_df.empty else 0.0
+    current_inr_bonds, maturity_inr_bonds = compute_accrued_and_maturity(bonds_inr_df)
+    current_usd_bonds, maturity_usd_bonds = compute_accrued_and_maturity(bonds_usd_df)
+
+    ret_inr_bonds = ((current_inr_bonds - invested_inr_bonds) / invested_inr_bonds * 100.0) if invested_inr_bonds>0 else 0.0
+    ret_usd_bonds = ((current_usd_bonds - invested_usd_bonds) / invested_usd_bonds * 100.0) if invested_usd_bonds>0 else 0.0
+
+    rows.append({
+        "Asset Class": "Bonds",
+        "Invested INR": round(invested_inr_bonds,2),
+        "Current INR": round(current_inr_bonds,2),
+        "Maturity INR": round(maturity_inr_bonds,2),
+        "Return % (INR)": round(ret_inr_bonds,2),
+        "Invested USD": round(invested_usd_bonds,2),
+        "Current USD": round(current_usd_bonds,2),
+        "Maturity USD": round(maturity_usd_bonds,2),
+        "Return % (USD)": round(ret_usd_bonds,2)
+    })
+
+    # --- FDs ---
+    invested_inr_fds = fds_inr_df["Principal"].sum() if not fds_inr_df.empty else 0.0
+    invested_usd_fds = fds_usd_df["Principal"].sum() if not fds_usd_df.empty else 0.0
+    current_inr_fds, maturity_inr_fds = compute_accrued_and_maturity(fds_inr_df)
+    current_usd_fds, maturity_usd_fds = compute_accrued_and_maturity(fds_usd_df)
+
+    ret_inr_fds = ((current_inr_fds - invested_inr_fds) / invested_inr_fds * 100.0) if invested_inr_fds>0 else 0.0
+    ret_usd_fds = ((current_usd_fds - invested_usd_fds) / invested_usd_fds * 100.0) if invested_usd_fds>0 else 0.0
+
+    rows.append({
+        "Asset Class": "FDs",
+        "Invested INR": round(invested_inr_fds,2),
+        "Current INR": round(current_inr_fds,2),
+        "Maturity INR": round(maturity_inr_fds,2),
+        "Return % (INR)": round(ret_inr_fds,2),
+        "Invested USD": round(invested_usd_fds,2),
+        "Current USD": round(current_usd_fds,2),
+        "Maturity USD": round(maturity_usd_fds,2),
+        "Return % (USD)": round(ret_usd_fds,2)
+    })
+
+    # --- Totals ---
+    tot_invested_inr = sum(r["Invested INR"] for r in rows)
+    tot_current_inr  = sum(r["Current INR"] for r in rows)
+    tot_maturity_inr = sum(r["Maturity INR"] for r in rows)
+    tot_invested_usd = sum(r["Invested USD"] for r in rows)
+    tot_current_usd  = sum(r["Current USD"] for r in rows)
+    tot_maturity_usd = sum(r["Maturity USD"] for r in rows)
+
+    tot_ret_inr = ((tot_current_inr - tot_invested_inr)/tot_invested_inr*100.0) if tot_invested_inr>0 else 0.0
+    tot_ret_usd = ((tot_current_usd - tot_invested_usd)/tot_invested_usd*100.0) if tot_invested_usd>0 else 0.0
+
+    rows.append({
+        "Asset Class": "TOTAL",
+        "Invested INR": round(tot_invested_inr,2),
+        "Current INR": round(tot_current_inr,2),
+        "Maturity INR": round(tot_maturity_inr,2),
+        "Return % (INR)": round(tot_ret_inr,2),
+        "Invested USD": round(tot_invested_usd,2),
+        "Current USD": round(tot_current_usd,2),
+        "Maturity USD": round(tot_maturity_usd,2),
+        "Return % (USD)": round(tot_ret_usd,2)
+    })
+
+    return pd.DataFrame(rows)
+
+snapshot_df = compute_snapshot()
+st.dataframe(snapshot_df, use_container_width=True)
 
 # ---------------- Portfolio Summary (per stock table + totals) ----------------
 st.subheader("Portfolio Summaries")
