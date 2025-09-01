@@ -1,8 +1,14 @@
 # -*- coding: utf-8 -*-
 """
-GlobalDashboard_final.py
-Full Streamlit app: stocks (INR+USD), bonds & FDs (INR+USD), allocation, ROI planner,
-benchmarks (1mo/3mo/6mo/1y/2y), INR depreciation, CSV imports/exports, safe yfinance downloads.
+GlobalDashboard_final.py (Cleaned & Updated)
+Full Streamlit app: stocks (INR+USD), bonds & FDs (INR+USD via CSV), allocation, ROI planner,
+benchmarks (1mo/3mo/6mo/1y/2y), INR depreciation, CSV exports, safe yfinance downloads.
+
+Changes vs previous:
+- Removed manual Bonds/FDs forms (CSV-only ingestion).
+- Fixed mean_rate() NaN handling.
+- ROI planner now also shows final allocation split by asset class (Stocks/Bonds/FDs)
+  across USD assets and INR assets, with USD-equivalent and INR amounts.
 """
 
 import streamlit as st
@@ -64,6 +70,7 @@ def batch_last_close(symbols):
         return {}
     out = {s: np.nan for s in symbols}
     data = safe_download(symbols, period="5d", interval="1d", group_by="ticker", threads=True)
+
     def extract_close(d, sym):
         try:
             if isinstance(d, pd.DataFrame) and isinstance(d.columns, pd.MultiIndex):
@@ -94,7 +101,7 @@ def batch_last_close(symbols):
 
 @st.cache_data(ttl=600)
 def get_fx_rate():
-    """USD per INR (we keep USDINR as INR per USD)."""
+    """INR per 1 USD (USDINR)."""
     try:
         finf = yf.Ticker("USDINR=X").fast_info
         if finf and finf.get("lastPrice") is not None:
@@ -109,7 +116,7 @@ def get_fx_rate():
         pass
     return 83.0
 
-fx_rate = get_fx_rate()  # INR per 1 USD
+fx_rate = get_fx_rate()  # INR per USD
 
 # ---------------- Loaders ----------------
 def load_stock_csv(f, is_india=True):
@@ -142,7 +149,8 @@ def load_asset_csv(f, currency="INR"):
     # interest col detection
     ir_col = None
     for c in df.columns:
-        if "interest" in c.lower(): ir_col = c
+        if "interest" in c.lower():
+            ir_col = c
     if ir_col:
         df["InterestRate"] = pd.to_numeric(df[ir_col], errors="coerce")
     else:
@@ -206,39 +214,6 @@ bonds_usd_df = load_asset_csv(bonds_usd_file, "USD")
 fds_inr_df = load_asset_csv(fds_inr_file, "INR")
 fds_usd_df = load_asset_csv(fds_usd_file, "USD")
 
-# Manual entry for bonds/fds (optional)
-def manual_add_asset(key, label, currency):
-    if key not in st.session_state:
-        st.session_state[key] = []
-    with st.form(f"form_{key}", clear_on_submit=True):
-        p = st.number_input(f"{label} Principal ({currency})", min_value=0.0, value=100000.0)
-        d = st.date_input(f"{label} Date", value=date.today())
-        r = st.number_input(f"{label} Interest Rate (%)", min_value=0.0, value=5.0)
-        submit = st.form_submit_button("Add")
-    if submit:
-        st.session_state[key].append({"Principal": float(p), "Date": str(d), "InterestRate": float(r), "Currency": currency})
-
-st.sidebar.subheader("Manual Bond/FD entry (optional)")
-manual_add_asset("bonds_inr_manual", "Bond (INR)", "INR")
-manual_add_asset("bonds_usd_manual", "Bond (USD)", "USD")
-manual_add_asset("fds_inr_manual", "FD (INR)", "INR")
-manual_add_asset("fds_usd_manual", "FD (USD)", "USD")
-
-# Merge manual entries into dfs
-bonds_inr_manual = pd.DataFrame(st.session_state.get("bonds_inr_manual", []))
-bonds_usd_manual = pd.DataFrame(st.session_state.get("bonds_usd_manual", []))
-fds_inr_manual = pd.DataFrame(st.session_state.get("fds_inr_manual", []))
-fds_usd_manual = pd.DataFrame(st.session_state.get("fds_usd_manual", []))
-
-if not bonds_inr_manual.empty:
-    bonds_inr_df = pd.concat([bonds_inr_df, bonds_inr_manual], ignore_index=True) if not bonds_inr_df.empty else bonds_inr_manual.copy()
-if not bonds_usd_manual.empty:
-    bonds_usd_df = pd.concat([bonds_usd_df, bonds_usd_manual], ignore_index=True) if not bonds_usd_df.empty else bonds_usd_manual.copy()
-if not fds_inr_manual.empty:
-    fds_inr_df = pd.concat([fds_inr_df, fds_inr_manual], ignore_index=True) if not fds_inr_df.empty else fds_inr_manual.copy()
-if not fds_usd_manual.empty:
-    fds_usd_df = pd.concat([fds_usd_df, fds_usd_manual], ignore_index=True) if not fds_usd_df.empty else fds_usd_manual.copy()
-
 # ---------------- Portfolio Summary (per stock table + totals) ----------------
 st.subheader("Portfolio Summaries")
 
@@ -253,7 +228,10 @@ def show_holdings_table(df_hold, title, native_currency_label):
     display["Market Value USD"] = display["Market Value USD"].round(4)
     display["Cost INR"] = display["Cost INR"].round(2)
     display["Cost USD"] = display["Cost USD"].round(4)
-    st.dataframe(display[["Ticker","Shares","Avg Cost (native)","Cost INR","Cost USD","Market Value INR","Market Value USD"]], use_container_width=True)
+    st.dataframe(
+        display[["Ticker","Shares","Avg Cost (native)","Cost INR","Cost USD","Market Value INR","Market Value USD"]],
+        use_container_width=True
+    )
     total_cost_inr = display["Cost INR"].sum()
     total_mv_inr = display["Market Value INR"].sum()
     total_pl_inr = total_mv_inr - total_cost_inr
@@ -305,9 +283,11 @@ st.altair_chart(pie, use_container_width=True)
 # ---------------- Benchmarks + portfolio performance chart ----------------
 if show_chart:
     st.subheader("Benchmark & Portfolio Performance (cost-basis)")
+
     def bench_series(sym, period=lookback):
         df = safe_download(sym, period=period, interval="1d")
-        if df.empty: return pd.Series(dtype=float)
+        if df.empty:
+            return pd.Series(dtype=float, name=sym)
         try:
             if "Close" in df.columns:
                 s = df["Close"].pct_change().add(1).cumprod() - 1
@@ -318,7 +298,7 @@ if show_chart:
                 s.name = sym
                 return s
         except Exception:
-            return pd.Series(dtype=float)
+            return pd.Series(dtype=float, name=sym)
 
     series_list = []
     for name, sym in {"S&P 500":"^GSPC","NASDAQ":"^IXIC","NIFTY50":"^NSEI"}.items():
@@ -329,21 +309,22 @@ if show_chart:
 
     # cost-basis portfolio series (use avg cost native, weight by cost INR)
     def build_cost_basis(df_hold, label, period=lookback):
-        if df_hold is None or df_hold.empty: return None
-        # We need avg native and cost in INR to weight
+        if df_hold is None or df_hold.empty:
+            return None
         parts = []
         total_cost_inr = df_hold["Cost INR"].sum()
-        if not pd.notna(total_cost_inr) or total_cost_inr <= 0: return None
+        if not pd.notna(total_cost_inr) or total_cost_inr <= 0:
+            return None
         for _, r in df_hold.iterrows():
             ticker = r["Ticker"]
             avg_native = r["Avg Cost (native)"]
-            # avg_native may be in INR for .NS or USD for US tickers; but we normalize with cost INR weighting
             cost_inr = r["Cost INR"]
-            weight = (cost_inr / total_cost_inr) if pd.notna(cost_inr) and total_cost_inr>0 else 0.0
-            if not (pd.notna(avg_native) and avg_native>0 and weight>0):
+            weight = (cost_inr / total_cost_inr) if pd.notna(cost_inr) and total_cost_inr > 0 else 0.0
+            if not (pd.notna(avg_native) and avg_native > 0 and weight > 0):
                 continue
             hist = safe_download(ticker, period=period, interval="1d")
-            if hist.empty: continue
+            if hist.empty:
+                continue
             try:
                 close = hist["Close"] if "Close" in hist.columns else hist[ticker]["Close"]
             except Exception:
@@ -351,24 +332,23 @@ if show_chart:
             contrib = (close / float(avg_native) - 1.0) * float(weight)
             contrib.name = ticker
             parts.append(contrib)
-        if not parts: return None
+        if not parts:
+            return None
         df_aligned = pd.concat(parts, axis=1).fillna(0.0)
         series = df_aligned.sum(axis=1)
         series.name = label
         return series
 
-    # prepare small df with Avg Cost native & Cost INR for builder
+    # prepare builder dfs
     def prepare_builder_df(hold_df):
-        if hold_df is None or hold_df.empty: return pd.DataFrame()
+        if hold_df is None or hold_df.empty:
+            return pd.DataFrame()
         out = pd.DataFrame()
         out["Ticker"] = hold_df["Ticker"]
         out["Avg Cost (native)"] = hold_df["Avg Cost (native)"]
         out["Cost INR"] = hold_df["Cost INR"]
         return out
 
-    # Note: our process_stocks created Cost INR/Cost USD; ensure presence
-    # If missing, attempt to calculate from Market Value and last price.
-    # For safety, fill missing Cost INR as Market Value INR (approx)
     if "Cost INR" not in india_hold.columns and "Market Value INR" in india_hold.columns:
         india_hold["Cost INR"] = india_hold["Market Value INR"]
     if "Cost INR" not in us_hold.columns and "Market Value USD" in us_hold.columns:
@@ -397,19 +377,19 @@ if show_chart:
 
 # ------------------ Consistency check (summary vs chart) ----------------
 def check_alignment(proc_df, series, label):
-    if proc_df is None or proc_df.empty or series is None or series.empty: return
+    if proc_df is None or proc_df.empty or series is None or (hasattr(series, "empty") and series.empty):
+        return
     tot_cost = proc_df["Cost INR"].sum()
     tot_mv = proc_df["Market Value INR"].sum()
-    if not (pd.notna(tot_cost) and tot_cost>0 and pd.notna(tot_mv)): return
+    if not (pd.notna(tot_cost) and tot_cost>0 and pd.notna(tot_mv)):
+        return
     summary_ret = (tot_mv - tot_cost) / tot_cost
     chart_ret = series.dropna().iloc[-1]
     st.caption(f"🔎 {label}: Summary return = {summary_ret:.2%}, Chart return = {chart_ret:.2%}, Δ = {(summary_ret - chart_ret):.2%}")
 
-# Build simple proc_df containing Cost INR and Market Value INR if not present
-# (our process_stocks already created Cost INR & Market Value INR)
-if not india_hold.empty and (ind_series is not None):
+if not india_hold.empty and (show_chart and ind_series is not None):
     check_alignment(india_hold, ind_series, "India Portfolio")
-if not us_hold.empty and (us_series is not None):
+if not us_hold.empty and (show_chart and us_series is not None):
     check_alignment(us_hold, us_series, "US Portfolio")
 
 # ------------------ ROI Planner & Suggested Allocation ----------------
@@ -421,21 +401,28 @@ r_india_local = india_growth / 100.0
 r_india_usd_equiv = r_india_local - dep
 r_us_local = us_growth / 100.0
 
-# bonds/fds mean rates
 def mean_rate(df_asset):
+    """Mean simple rate from InterestRate column; returns np.nan if not available."""
     if df_asset is None or df_asset.empty or "InterestRate" not in df_asset.columns:
         return np.nan
-    return float(pd.to_numeric(df_asset["InterestRate"], errors="coerce").dropna().mean())
+    vals = pd.to_numeric(df_asset["InterestRate"], errors="coerce").dropna()
+    return float(vals.mean()) if not vals.empty else np.nan
 
-r_bonds_inr = mean_rate(bonds_inr_df)/100.0 if mean_rate(bonds_inr_df) is not np.nan else 0.06
-r_bonds_usd = mean_rate(bonds_usd_df)/100.0 if mean_rate(bonds_usd_df) is not np.nan else 0.03
-r_fds_inr = mean_rate(fds_inr_df)/100.0 if mean_rate(fds_inr_df) is not np.nan else 0.05
-r_fds_usd = mean_rate(fds_usd_df)/100.0 if mean_rate(fds_usd_df) is not np.nan else 0.025
+# Fallbacks if NaN
+mr_b_inr = mean_rate(bonds_inr_df)
+mr_b_usd = mean_rate(bonds_usd_df)
+mr_f_inr = mean_rate(fds_inr_df)
+mr_f_usd = mean_rate(fds_usd_df)
+
+r_bonds_inr = (mr_b_inr/100.0) if not np.isnan(mr_b_inr) else 0.06
+r_bonds_usd = (mr_b_usd/100.0) if not np.isnan(mr_b_usd) else 0.03
+r_fds_inr   = (mr_f_inr/100.0) if not np.isnan(mr_f_inr) else 0.05
+r_fds_usd   = (mr_f_usd/100.0) if not np.isnan(mr_f_usd) else 0.025
 
 r_bonds_inr_usd_equiv = r_bonds_inr - dep
-r_fds_inr_usd_equiv = r_fds_inr - dep
+r_fds_inr_usd_equiv   = r_fds_inr   - dep
 
-# Current amounts in USD
+# Current amounts in USD (by 6 segments)
 A_us_stock = segments["USD Stocks"]["USD"]
 A_ind_stock = segments["INR Stocks"]["USD"]
 A_us_bonds = segments["USD Bonds"]["USD"]
@@ -458,13 +445,17 @@ else:
     )
     st.write(f"Expected current (USD-equivalent) ROI: **{expected_current*100:.2f}%** per year. Target: **{target_roi:.2f}%**.")
 
-    # Simplified approach: solve for equities weight vs fixed weight
+    # Solve for equities vs fixed weight to hit target ROI
     equities_usd = A_us_stock + A_ind_stock
     fixed_usd = A_us_bonds + A_ind_bonds + A_us_fds + A_ind_fds
 
-    # average returns
     r_equities = ((A_us_stock * r_us_local) + (A_ind_stock * r_india_usd_equiv)) / equities_usd if equities_usd>0 else 0.0
-    r_fixed = ((A_us_bonds * r_bonds_usd) + (A_ind_bonds * r_bonds_inr_usd_equiv) + (A_us_fds * r_fds_usd) + (A_ind_fds * r_fds_inr_usd_equiv)) / fixed_usd if fixed_usd>0 else 0.0
+    r_fixed = (
+        (A_us_bonds * r_bonds_usd) +
+        (A_ind_bonds * r_bonds_inr_usd_equiv) +
+        (A_us_fds * r_fds_usd) +
+        (A_ind_fds * r_fds_inr_usd_equiv)
+    ) / fixed_usd if fixed_usd>0 else 0.0
 
     tR = target_roi / 100.0
     if (r_equities - r_fixed) == 0:
@@ -476,54 +467,133 @@ else:
     suggested_equities_amount = suggested_equities_weight * total_usd if not np.isnan(suggested_equities_weight) else np.nan
     suggested_fixed_amount = total_usd - suggested_equities_amount if not np.isnan(suggested_equities_amount) else np.nan
 
-    # within equities split proportionally to existing equity composition
+    # Split equities proportionally by current equity composition
     prop_ind_equity = (A_ind_stock / equities_usd) if equities_usd>0 else 0.0
     prop_us_equity = (A_us_stock / equities_usd) if equities_usd>0 else 0.0
 
     sug_ind_equity_usd = suggested_equities_amount * prop_ind_equity if not np.isnan(suggested_equities_amount) else 0.0
-    sug_us_equity_usd = suggested_equities_amount * prop_us_equity if not np.isnan(suggested_equities_amount) else 0.0
+    sug_us_equity_usd  = suggested_equities_amount * prop_us_equity if not np.isnan(suggested_equities_amount) else 0.0
 
-    # within fixed split proportionally to current fixed composition
-    props_fixed = {}
+    # Split fixed proportionally by current fixed composition
     if fixed_usd>0:
-        props_fixed["us_bonds"] = A_us_bonds / fixed_usd
-        props_fixed["ind_bonds"] = A_ind_bonds / fixed_usd
-        props_fixed["us_fds"] = A_us_fds / fixed_usd
-        props_fixed["ind_fds"] = A_ind_fds / fixed_usd
+        props_fixed = {
+            "us_bonds": A_us_bonds / fixed_usd,
+            "ind_bonds": A_ind_bonds / fixed_usd,
+            "us_fds": A_us_fds / fixed_usd,
+            "ind_fds": A_ind_fds / fixed_usd,
+        }
     else:
-        props_fixed = {"us_bonds":0,"ind_bonds":0,"us_fds":0,"ind_fds":0}
+        props_fixed = {"us_bonds":0.0,"ind_bonds":0.0,"us_fds":0.0,"ind_fds":0.0}
 
     sug_us_bonds = suggested_fixed_amount * props_fixed["us_bonds"] if not np.isnan(suggested_fixed_amount) else 0.0
     sug_ind_bonds = suggested_fixed_amount * props_fixed["ind_bonds"] if not np.isnan(suggested_fixed_amount) else 0.0
     sug_us_fds = suggested_fixed_amount * props_fixed["us_fds"] if not np.isnan(suggested_fixed_amount) else 0.0
     sug_ind_fds = suggested_fixed_amount * props_fixed["ind_fds"] if not np.isnan(suggested_fixed_amount) else 0.0
 
-    # Build suggestion DataFrame
+    # 6-segment suggestion table (as before, but clearer)
     suggest = pd.DataFrame([
-        {"Segment":"USD Stocks", "Current USD": A_us_stock, "Suggested USD": sug_us_equity_usd},
+        {"Segment":"USD Stocks", "Current USD": A_us_stock,  "Suggested USD": sug_us_equity_usd},
         {"Segment":"INR Stocks", "Current USD": A_ind_stock, "Suggested USD": sug_ind_equity_usd},
-        {"Segment":"USD Bonds", "Current USD": A_us_bonds, "Suggested USD": sug_us_bonds},
-        {"Segment":"INR Bonds", "Current USD": A_ind_bonds, "Suggested USD": sug_ind_bonds},
-        {"Segment":"USD FDs", "Current USD": A_us_fds, "Suggested USD": sug_us_fds},
-        {"Segment":"INR FDs", "Current USD": A_ind_fds, "Suggested USD": sug_ind_fds},
+        {"Segment":"USD Bonds",  "Current USD": A_us_bonds,  "Suggested USD": sug_us_bonds},
+        {"Segment":"INR Bonds",  "Current USD": A_ind_bonds, "Suggested USD": sug_ind_bonds},
+        {"Segment":"USD FDs",    "Current USD": A_us_fds,    "Suggested USD": sug_us_fds},
+        {"Segment":"INR FDs",    "Current USD": A_ind_fds,   "Suggested USD": sug_ind_fds},
     ])
-    suggest["Current INR"] = (suggest["Current USD"] * fx_rate).round(2)
+    suggest["Current INR"]   = (suggest["Current USD"]   * fx_rate).round(2)
     suggest["Suggested INR"] = (suggest["Suggested USD"] * fx_rate).round(2)
-    suggest["Current USD"] = suggest["Current USD"].round(4)
+    suggest["Current USD"]   = suggest["Current USD"].round(4)
     suggest["Suggested USD"] = suggest["Suggested USD"].round(4)
-    total_suggested_usd = suggest["Suggested USD"].sum() if suggest["Suggested USD"].sum() > 0 else total_usd
-    suggest["Suggested %"] = suggest["Suggested USD"].apply(lambda x: round((x/total_suggested_usd*100) if total_suggested_usd>0 else 0.0,2))
+    total_suggested_usd = float(suggest["Suggested USD"].sum())
+    if total_suggested_usd <= 0:
+        total_suggested_usd = total_usd
+    suggest["Suggested %"] = suggest["Suggested USD"].apply(
+        lambda x: round((x/total_suggested_usd*100) if total_suggested_usd>0 else 0.0,2)
+    )
 
-    st.write("Suggested reallocation (USD & INR amounts + % of suggested total):")
-    st.dataframe(suggest[["Segment","Current USD","Current INR","Suggested USD","Suggested INR","Suggested %"]], use_container_width=True)
+    st.write("**Suggested reallocation (USD & INR amounts + % of suggested total):**")
+    st.dataframe(
+        suggest[["Segment","Current USD","Current INR","Suggested USD","Suggested INR","Suggested %"]],
+        use_container_width=True
+    )
 
     # suggested pie (INR)
     pie_sug = alt.Chart(suggest).mark_arc(innerRadius=30).encode(
         theta=alt.Theta(field="Suggested INR", type="quantitative"),
         color=alt.Color(field="Segment", type="nominal"),
-        tooltip=["Segment", alt.Tooltip("Suggested INR", format=",.2f")]
+        tooltip=["Segment", alt.Tooltip("Suggested INR", format=",.2f"), alt.Tooltip("Suggested USD", format=",.4f")]
     ).properties(title="Suggested Allocation (INR amounts)")
     st.altair_chart(pie_sug, use_container_width=True)
+
+    # -------- New: Final allocation split by asset class & currency --------
+    # Aggregate suggested USD across USD-assets vs INR-assets by (Stocks, Bonds, FDs)
+    stocks_usd_assets = float(sug_us_equity_usd)
+    stocks_inr_assets = float(sug_ind_equity_usd)
+    bonds_usd_assets  = float(sug_us_bonds)
+    bonds_inr_assets  = float(sug_ind_bonds)
+    fds_usd_assets    = float(sug_us_fds)
+    fds_inr_assets    = float(sug_ind_fds)
+
+    summary_rows = []
+    for asset, usd_amt, inr_usd_amt in [
+        ("Stocks", stocks_usd_assets, stocks_inr_assets),
+        ("Bonds",  bonds_usd_assets,  bonds_inr_assets),
+        ("FDs",    fds_usd_assets,    fds_inr_assets),
+    ]:
+        row = {
+            "Asset Class": asset,
+            "USD assets (USD)": round(usd_amt, 4),
+            "INR assets (USD-eq)": round(inr_usd_amt, 4),
+            "Total (USD)": round(usd_amt + inr_usd_amt, 4),
+            "USD assets (INR)": round(usd_amt * fx_rate, 2),
+            "INR assets (INR)": round(inr_usd_amt * fx_rate, 2),
+            "Total (INR)": round((usd_amt + inr_usd_amt) * fx_rate, 2),
+        }
+        summary_rows.append(row)
+
+    summary_df = pd.DataFrame(summary_rows)
+    grand_total_usd = float(summary_df["Total (USD)"].sum())
+    summary_df["% of Total USD"] = summary_df["Total (USD)"].apply(
+        lambda x: round((x / grand_total_usd * 100.0) if grand_total_usd > 0 else 0.0, 2)
+    )
+
+    st.write("**Final allocation split (to meet target ROI) — by asset class & currency**")
+    st.dataframe(
+        summary_df[[
+            "Asset Class",
+            "USD assets (USD)", "INR assets (USD-eq)", "Total (USD)", "% of Total USD",
+            "USD assets (INR)", "INR assets (INR)", "Total (INR)"
+        ]],
+        use_container_width=True
+    )
+    # -------- Validation messages for InterestRate inputs --------
+    if bonds_inr_file and "InterestRate" not in bonds_inr_df.columns:
+        st.warning("⚠️ Bonds (INR) CSV missing 'InterestRate' column — using default 6% assumption.")
+    if bonds_usd_file and "InterestRate" not in bonds_usd_df.columns:
+        st.warning("⚠️ Bonds (USD) CSV missing 'InterestRate' column — using default 3% assumption.")
+    if fds_inr_file and "InterestRate" not in fds_inr_df.columns:
+        st.warning("⚠️ FDs (INR) CSV missing 'InterestRate' column — using default 5% assumption.")
+    if fds_usd_file and "InterestRate" not in fds_usd_df.columns:
+        st.warning("⚠️ FDs (USD) CSV missing 'InterestRate' column — using default 2.5% assumption.")
+
+    # -------- Visualization: stacked bar chart of target split --------
+    chart_long = summary_df.melt(
+        id_vars="Asset Class",
+        value_vars=["USD assets (USD)", "INR assets (USD-eq)"],
+        var_name="Currency", value_name="Amount (USD)"
+    )
+    chart_long["Currency"] = chart_long["Currency"].replace({
+        "USD assets (USD)": "USD assets",
+        "INR assets (USD-eq)": "INR assets"
+    })
+
+    bar_chart = alt.Chart(chart_long).mark_bar().encode(
+        x=alt.X("Asset Class:N", title="Asset Class"),
+        y=alt.Y("Amount (USD):Q", stack="zero", title="Suggested Allocation (USD)"),
+        color=alt.Color("Currency:N", scale=alt.Scale(scheme="set2")),
+        tooltip=["Asset Class", "Currency", alt.Tooltip("Amount (USD):Q", format=",.2f")]
+    ).properties(title="Final Target Allocation Split (USD assets vs INR assets)")
+
+    st.altair_chart(bar_chart, use_container_width=True)
 
 # ------------------ Exports ----------------
 st.subheader("Export processed data")
@@ -542,7 +612,7 @@ if not fds_usd_df.empty:
     st.download_button("Download FDs USD CSV", data=fds_usd_df.to_csv(index=False), file_name="fds_usd.csv", mime="text/csv")
 
 # Combined Excel
-if not (india_hold.empty and us_hold.empty):
+if not (india_hold.empty and us_hold.empty and bonds_inr_df.empty and bonds_usd_df.empty and fds_inr_df.empty and fds_usd_df.empty):
     out = BytesIO()
     with pd.ExcelWriter(out, engine="xlsxwriter") as writer:
         if not india_hold.empty: india_hold.to_excel(writer, sheet_name="IndiaStocks", index=False)
@@ -553,4 +623,4 @@ if not (india_hold.empty and us_hold.empty):
         if not fds_usd_df.empty: fds_usd_df.to_excel(writer, sheet_name="FDs_USD", index=False)
     st.sidebar.download_button("Download All (Excel)", data=out.getvalue(), file_name="portfolio_full_export.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-st.caption("Notes: INR depreciation slider approximates USD-equivalent returns for INR assets. Suggested allocation is a simplified rebalancing method (equities vs fixed income) and then proportional distribution.")
+st.caption("Notes: INR depreciation slider approximates USD-equivalent returns for INR assets. Suggested allocation is a simplified rebalancing (equities vs fixed income) and then proportional distribution within each bucket; the summary table aggregates results by asset class and currency.")
