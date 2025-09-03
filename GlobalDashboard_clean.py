@@ -734,20 +734,19 @@ else:
 
     st.altair_chart(bar_chart, use_container_width=True)
 # ------------------ Projections: Current vs Revised (30y, 5-year steps) ------------------REV 9
+# ------------------ Projections: Current vs Revised (30y, 5-year steps) ------------------REV 10
 st.subheader("Return Projections (Cumulative, Compounded)")
 
-# Helper: build cumulative projection given absolute USD amounts per segment
 def _projection_from_amounts(amounts):
     """
-    amounts: dict with keys
-      'us_stock','ind_stock','us_bonds','ind_bonds','us_fds','ind_fds'  (USD amounts)
-    Returns DataFrame with Year and Cumulative ROI % (USD-equivalent).
+    Build projection DataFrame given USD amounts in different asset classes.
+    Returns DataFrame with Year and Cumulative ROI %.
     """
     total = sum(float(amounts.get(k, 0.0)) for k in ["us_stock","ind_stock","us_bonds","ind_bonds","us_fds","ind_fds"])
     if total <= 0:
         return pd.DataFrame(columns=["Year","Cumulative ROI %"])
 
-    # weights (proportions)
+    # weights
     w_us_stock = float(amounts.get("us_stock", 0.0)) / total
     w_ind_stock = float(amounts.get("ind_stock", 0.0)) / total
     w_us_bonds = float(amounts.get("us_bonds", 0.0)) / total
@@ -755,8 +754,8 @@ def _projection_from_amounts(amounts):
     w_us_fds = float(amounts.get("us_fds", 0.0)) / total
     w_ind_fds = float(amounts.get("ind_fds", 0.0)) / total
 
-    # Effective (USD-equivalent) rates already computed above
-    years = list(range(0, 31, 5))  # 0,5,10,15,20,25,30
+    # Years: 0,5,...,30
+    years = list(range(0, 31, 5))
     rows = []
     for y in years:
         # Stocks — compounded
@@ -771,11 +770,11 @@ def _projection_from_amounts(amounts):
         fds_cum = (w_us_fds * ((1.0 + r_fds_usd) ** y - 1.0)) + \
                   (w_ind_fds * ((1.0 + r_fds_inr_usd_equiv) ** y - 1.0))
 
-        total_cum = (stock_cum + bonds_cum + fds_cum) * 100.0  # to %
+        total_cum = (stock_cum + bonds_cum + fds_cum) * 100.0
         rows.append({"Year": y, "Cumulative ROI %": round(total_cum, 2)})
     return pd.DataFrame(rows)
 
-# ---- Current allocation (USD amounts) ----
+# Current allocation
 current_amounts = {
     "us_stock": A_us_stock,
     "ind_stock": A_ind_stock,
@@ -786,33 +785,37 @@ current_amounts = {
 }
 df_current_proj = _projection_from_amounts(current_amounts)
 
-# ---- Revised allocation (suggested USD amounts); fallback to current if suggestions not valid
-if any(np.isnan(x) for x in [
-    sug_us_equity_usd, sug_ind_equity_usd, sug_us_bonds, sug_ind_bonds, sug_us_fds, sug_ind_fds
-]):
+# Revised allocation (fallback to current if sug_* not defined or invalid)
+try:
+    suggested_vars = [
+        sug_us_equity_usd, sug_ind_equity_usd,
+        sug_us_bonds, sug_ind_bonds, sug_us_fds, sug_ind_fds
+    ]
+    if any(np.isnan(x) for x in suggested_vars):
+        revised_amounts = current_amounts
+    else:
+        revised_amounts = {
+            "us_stock": float(sug_us_equity_usd),
+            "ind_stock": float(sug_ind_equity_usd),
+            "us_bonds": float(sug_us_bonds),
+            "ind_bonds": float(sug_ind_bonds),
+            "us_fds": float(sug_us_fds),
+            "ind_fds": float(sug_ind_fds)
+        }
+except NameError:
     revised_amounts = current_amounts
-else:
-    revised_amounts = {
-        "us_stock": float(sug_us_equity_usd),
-        "ind_stock": float(sug_ind_equity_usd),
-        "us_bonds": float(sug_us_bonds),
-        "ind_bonds": float(sug_ind_bonds),
-        "us_fds": float(sug_us_fds),
-        "ind_fds": float(sug_ind_fds)
-    }
+
 df_revised_proj = _projection_from_amounts(revised_amounts)
 
-# Chart helpers
+# Chart helper
 def _projection_chart(df, title_text):
-    ch = alt.Chart(df).mark_bar().encode(
+    return alt.Chart(df).mark_bar().encode(
         x=alt.X("Year:O", title="Years from now (0–30, 5-year steps)"),
         y=alt.Y("Cumulative ROI %:Q", title="Cumulative ROI (%)"),
         tooltip=[alt.Tooltip("Year:O", title="Year"),
                  alt.Tooltip("Cumulative ROI %:Q", title="Cumulative ROI (%)", format=",.2f")]
     ).properties(title=title_text)
-    return ch
 
-# Render the two charts
 from datetime import date
 if not df_current_proj.empty:
     start_y = date.today().year
@@ -828,6 +831,7 @@ if not df_revised_proj.empty:
 else:
     st.info("Revised Return Projection: not enough data to compute.")
 
+# ------------------ REV 10 Code ends ----------------
 # ------------------ Exports ----------------
 st.subheader("Export processed data")
 if not india_hold.empty:
