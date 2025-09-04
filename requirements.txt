@@ -5,4 +5,5 @@ yfinance
 altair
 xlsxwriter
 streamlit-autorefresh
+plotly
 
