@@ -733,6 +733,99 @@ else:
     ).properties(title="Final Target Allocation Split (USD assets vs INR assets)")
 
     st.altair_chart(bar_chart, use_container_width=True)
+
+# ------------------ Risk Gauges (Current vs Future Allocation) ------------------REV 11
+import plotly.graph_objects as go
+
+st.subheader("Portfolio Risk Meters")
+
+# Risk mapping (extended for future asset classes)
+risk_map = {
+    "Gold": 0,
+    "FDs": 3,
+    "Bonds": 5,
+    "Stocks": 8,
+    "Options": 10
+}
+
+def compute_portfolio_risk(df, value_col="Amount INR"):
+    """
+    Compute weighted average risk given a DataFrame with allocations.
+    df must have columns: 'Segment' and one of ['Amount INR','Suggested INR'].
+    """
+    if df is None or df.empty or value_col not in df.columns:
+        return 0.0
+    total = df[value_col].sum()
+    if total <= 0:
+        return 0.0
+    risk_score = 0.0
+    for _, row in df.iterrows():
+        seg = row["Segment"]
+        if "Gold" in seg:
+            r = risk_map["Gold"]
+        elif "Stock" in seg:
+            r = risk_map["Stocks"]
+        elif "Bond" in seg:
+            r = risk_map["Bonds"]
+        elif "FD" in seg:
+            r = risk_map["FDs"]
+        elif "Option" in seg:
+            r = risk_map["Options"]
+        else:
+            r = 0
+        risk_score += (row[value_col] / total) * r
+    return round(risk_score, 2)
+
+# Current risk (from alloc_df)
+current_risk = compute_portfolio_risk(alloc_df, value_col="Amount INR")
+
+# Future risk (from suggest if available, else fallback to current)
+try:
+    future_risk = compute_portfolio_risk(suggest, value_col="Suggested INR")
+except Exception:
+    future_risk = current_risk
+
+def make_gauge(value, title):
+    return go.Figure(go.Indicator(
+        mode="gauge+number",
+        value=value,
+        domain={'x': [0, 1], 'y': [0, 1]},
+        title={'text': title},
+        gauge={
+            'axis': {'range': [0, 10]},
+            'bar': {'color': "darkblue"},
+            'steps': [
+                {'range': [0, 3], 'color': "gold"},
+                {'range': [3, 5], 'color': "lightgreen"},
+                {'range': [5, 8], 'color': "orange"},
+                {'range': [8, 10], 'color': "red"},
+            ],
+            'threshold': {
+                'line': {'color': "black", 'width': 4},
+                'thickness': 0.75,
+                'value': value
+            }
+        }
+    ))
+
+col1, col2 = st.columns(2)
+with col1:
+    st.plotly_chart(make_gauge(current_risk, "Current Risk"), use_container_width=True)
+with col2:
+    st.plotly_chart(make_gauge(future_risk, "Future Risk"), use_container_width=True)
+
+# Legend for risk scale
+st.markdown("""
+**Risk Scale Reference**  
+- 0 = Gold  
+- 3 = FD  
+- 5 = Bonds  
+- 8 = Stocks  
+- 10 = Options  
+""")
+
+
+
 # ------------------ Projections: Current vs Revised (30y, 5-year steps) ------------------REV 9
 # ------------------ Projections: Current vs Revised (30y, 5-year steps) ------------------REV 10
 st.subheader("Return Projections (Cumulative, Compounded)")
